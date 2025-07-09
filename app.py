@@ -4,7 +4,7 @@ import numpy as np
 from lightfm import LightFM
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="LightFM Recommender API")
+app = FastAPI(title="LightFM Recommender API with Filtering")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,18 +30,27 @@ with open("model/id_to_title.pkl", "rb") as f:
 inv_item_mapping = {v: k for k, v in item_mapping.items()}
 
 @app.get("/recommend")
-def recommend(user_id: str = Query(..., description="User ID as string"),
-              num_recs: int = Query(5, description="Number of recommendations")):
+def recommend(
+    user_id: str = Query(..., description="User ID as string"),
+    num_recs: int = Query(5, description="Number of recommendations"),
+    exclude_watched: bool = Query(True, description="Exclude already watched movies")
+):
     n_items = len(item_mapping)
     user_internal_id = dataset.mapping()[0].get(user_id)
+
     if user_internal_id is None:
         return {"error": f"User ID {user_id} not found in training data."}
 
     scores = model.predict(user_internal_id, np.arange(n_items))
+
+    if exclude_watched:
+        user_items = dataset.build_interactions([(user_id, str(item_id))
+                                                 for item_id in inv_item_mapping.keys()])[0]
+        watched_items = user_items.tocsr()[user_internal_id].indices
+        scores[watched_items] = -np.inf  # Effectively exclude watched items
+
     top_items = np.argsort(-scores)[:num_recs]
     rec_item_ids = [inv_item_mapping[i] for i in top_items]
-
-    # Map item IDs to titles, handling missing cases gracefully
     rec_titles = [id_to_title.get(item_id, f"Unknown Title (ID {item_id})") for item_id in rec_item_ids]
 
     return {
